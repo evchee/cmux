@@ -110,6 +110,26 @@ final class TerminalPanel: Panel, ObservableObject {
         self.init(workspaceId: workspaceId, surface: surface)
     }
 
+    /// Create a tmux CC-backed terminal panel. No SSH subprocess is spawned;
+    /// terminal output is injected from the CC `%output` stream and keyboard
+    /// input is routed back via `send-keys`.
+    convenience init(
+        workspaceId: UUID,
+        tmuxPaneId: String,
+        onTmuxInput: @escaping (Data) -> Void,
+        configTemplate: CmuxSurfaceConfigTemplate? = nil,
+        portOrdinal: Int = 0
+    ) {
+        let surface = TerminalSurface(
+            tabId: workspaceId,
+            tmuxPaneId: tmuxPaneId,
+            onTmuxInput: onTmuxInput,
+            configTemplate: configTemplate
+        )
+        surface.portOrdinal = portOrdinal
+        self.init(workspaceId: workspaceId, surface: surface)
+    }
+
     func updateTitle(_ newTitle: String) {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty && title != trimmed {

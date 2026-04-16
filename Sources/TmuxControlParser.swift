@@ -112,6 +112,10 @@ enum TmuxControlEvent {
     case pasteBufferChanged
     /// A client switched to a different session. tmux ≥3.6.
     case clientSessionChanged
+    /// A pane's output was paused (backpressure). tmux ≥3.2 with pause-after.
+    case pause(paneId: String)
+    /// A previously paused pane's output has resumed.
+    case continueOutput(paneId: String)
     /// tmux control mode is exiting.
     case exit
 }
@@ -200,6 +204,14 @@ struct TmuxControlParser {
 
         case "%client-session-changed":
             return .clientSessionChanged
+
+        case "%pause":
+            guard tokens.count >= 2 else { return nil }
+            return .pause(paneId: tokens[1])
+
+        case "%continue":
+            guard tokens.count >= 2 else { return nil }
+            return .continueOutput(paneId: tokens[1])
 
         case "%exit":
             return .exit

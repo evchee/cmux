@@ -104,7 +104,8 @@ final class TmuxLayoutReconciler {
         case .exit, .windowAdd,
              .sessionRenamed, .sessionsChanged, .windowRenamed,
              .sessionWindowChanged, .windowPaneChanged,
-             .paneModeChanged, .pasteBufferChanged, .clientSessionChanged:
+             .paneModeChanged, .pasteBufferChanged, .clientSessionChanged,
+             .pause, .continueOutput:
             // These events are handled at the Workspace level.
             break
         }
@@ -119,6 +120,11 @@ final class TmuxLayoutReconciler {
     @MainActor func windowId(forPanel panelId: UUID) -> String? {
         guard let paneId = panelToPane[panelId] else { return nil }
         return paneToWindow[paneId]
+    }
+
+    /// Returns the tmux pane ID for the panel with the given UUID, or nil.
+    @MainActor func tmuxPaneId(forPanel panelId: UUID) -> String? {
+        panelToPane[panelId]
     }
 
     /// Returns all currently tracked cmux panel UUIDs.
@@ -204,6 +210,9 @@ final class TmuxLayoutReconciler {
                 let nb = Int(b.dropFirst()) ?? 0
                 return na < nb
             }
+#if DEBUG
+        print("[reconciler] step3 window=\(window) live=\(livePaneIds.sorted()) tracked=\(Set(trackedPanes.keys).sorted()) dismissed=\(userDismissedPanes.sorted()) new=\(newPanes)")
+#endif
 
         var reconciledPaneIds: Set<String> = livePaneIds.filter { trackedPanes[$0] != nil }
         reconciledPaneIds.formUnion(userDismissedPanes.intersection(livePaneIds))

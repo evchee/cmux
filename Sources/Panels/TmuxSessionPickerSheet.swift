@@ -20,11 +20,31 @@ struct TmuxSessionPickerSheet: View {
         return name.range(of: #"^[a-zA-Z0-9_-]+$"#, options: .regularExpression) != nil
     }
 
+    /// True when the tmux probe hasn't completed yet (no sessions discovered).
+    private var isLoading: Bool {
+        !workspace.remoteTmuxAvailable && workspace.remoteTmuxSessions.isEmpty
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text(String(localized: "tmux.picker.title", defaultValue: "Connect to tmux Session"))
                 .font(.title3.weight(.semibold))
 
+            if isLoading || isSubmitting {
+                HStack(spacing: 12) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(isSubmitting
+                         ? String(localized: "tmux.picker.attaching", defaultValue: "Attaching to tmux session...")
+                         : String(localized: "tmux.picker.connecting", defaultValue: "Connecting to remote host..."))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 20)
+            }
+
+            if !isLoading {
             Text(
                 String(
                     localized: "tmux.picker.subtitle",
@@ -34,6 +54,7 @@ struct TmuxSessionPickerSheet: View {
             .font(.system(size: 13))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+            }
 
             if !workspace.remoteTmuxSessions.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -75,8 +96,11 @@ struct TmuxSessionPickerSheet: View {
                 }
             }
 
+            if !isLoading {
             Divider()
+            }
 
+            if !isLoading {
             VStack(alignment: .leading, spacing: 8) {
                 Text(String(localized: "tmux.picker.new", defaultValue: "Create new session"))
                     .font(.subheadline.weight(.medium))
@@ -104,6 +128,8 @@ struct TmuxSessionPickerSheet: View {
                     .foregroundStyle(.red)
                 }
             }
+
+            } // end if !isLoading (create section)
 
             HStack {
                 Spacer()
