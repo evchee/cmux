@@ -210,10 +210,6 @@ final class TmuxLayoutReconciler {
                 let nb = Int(b.dropFirst()) ?? 0
                 return na < nb
             }
-#if DEBUG
-        print("[reconciler] step3 window=\(window) live=\(livePaneIds.sorted()) tracked=\(Set(trackedPanes.keys).sorted()) dismissed=\(userDismissedPanes.sorted()) new=\(newPanes)")
-#endif
-
         var reconciledPaneIds: Set<String> = livePaneIds.filter { trackedPanes[$0] != nil }
         reconciledPaneIds.formUnion(userDismissedPanes.intersection(livePaneIds))
 

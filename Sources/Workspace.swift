@@ -9552,9 +9552,6 @@ final class Workspace: Identifiable, ObservableObject {
     @MainActor
     @discardableResult
     func newTerminalSplitForTmuxPane(_ paneId: String, windowHint: String) -> UUID? {
-#if DEBUG
-        dlog("newTerminalSplitForTmuxPane paneId=\(paneId) windowHint=\(windowHint) pending=\(pendingTmuxPanelIds.map { "\($0.panelId.uuidString.prefix(5)):\($0.windowHint ?? "nil")" })")
-#endif
         // Check if a pending (user-initiated) panel can be claimed for this pane.
         // Finalize its CC mapping: set the real pane ID and wire up send-keys.
         for useWindowHint in [true, false] {
@@ -9579,9 +9576,6 @@ final class Workspace: Identifiable, ObservableObject {
             }
             tmuxPaneSurfaces[paneId] = panel.id
             flushTmuxOutputBuffer(paneId: paneId)
-#if DEBUG
-            dlog("newTerminalSplitForTmuxPane.claimed.\(useWindowHint ? "window" : "nil") panelId=\(panel.id.uuidString.prefix(5)) pane=\(paneId)")
-#endif
             return panel.id
         }
 
@@ -9593,12 +9587,7 @@ final class Workspace: Identifiable, ObservableObject {
         } else {
             sourcePanelId = panels.values.compactMap { $0 as? TerminalPanel }.first?.id
         }
-        guard let sourcePanelId else {
-#if DEBUG
-            dlog("newTerminalSplitForTmuxPane.no-source paneId=\(paneId)")
-#endif
-            return nil
-        }
+        guard let sourcePanelId else { return nil }
         return newTmuxCCSplit(from: sourcePanelId, paneId: paneId)?.id
     }
 
@@ -9654,9 +9643,6 @@ final class Workspace: Identifiable, ObservableObject {
             untrackRemoteTerminalSurface(newPanel.id)
             return nil
         }
-#if DEBUG
-        dlog("tmuxCC.split.created paneId=\(paneId) panelId=\(newPanel.id.uuidString.prefix(5))")
-#endif
         // Fetch existing scrollback so the pane isn't blank on attach.
         remoteSessionController?.sendTmuxControlCommand(
             "capture-pane -p -e -t \(paneId) -S -1000",
@@ -10470,9 +10456,6 @@ final class Workspace: Identifiable, ObservableObject {
                 let tgt = shellSingleQuote(exactTarget)
                 remoteCmd = "wid=$(tmux new-window -t \(tgt) -P -F '#{window_id}'); exec tmux new-session -t \(tgt) \\; select-window -t \"$wid\""
             }
-#if DEBUG
-            dlog("tmux.startup.remoteCmd paneId=\(tmuxPaneId ?? "nil") exactTarget=\(exactTarget) cmd=\(remoteCmd)")
-#endif
             return buildTmuxSSHStartupScript(config: config, remoteCommand: remoteCmd, tmuxPaneId: tmuxPaneId)
         }
         guard let command = remoteConfiguration?.terminalStartupCommand?
@@ -10530,9 +10513,6 @@ final class Workspace: Identifiable, ObservableObject {
                 [.posixPermissions: 0o700],
                 ofItemAtPath: scriptURL.path
             )
-#if DEBUG
-            dlog("tmux.startup.script path=\(scriptURL.path) content=\(script.prefix(300))")
-#endif
             return scriptURL.path
         } catch {
 #if DEBUG
