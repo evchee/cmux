@@ -4216,9 +4216,7 @@ final class WorkspaceRemoteSessionController {
             tmuxControlDataBuffer = Data()
             return
         }
-        // Send `detach-client` through the CC pipe so tmux cleanly detaches
-        // the control-mode client on the server. Without this, killing SSH
-        // abruptly leaves zombie CC clients attached on the remote.
+        // Best-effort: send `detach-client` through the CC pipe before killing SSH.
         if let pipe = tmuxControlStdinPipe,
            let detachData = "detach-client\n".data(using: .utf8) {
             pipe.fileHandleForWriting.write(detachData)
@@ -4237,13 +4235,31 @@ final class WorkspaceRemoteSessionController {
         tmuxInResponse = false
         tmuxResponseLines = []
         tmuxResponseQueue = []
+        // Also fire a separate SSH command to detach the CC client. The CC pipe
+        // detach is unreliable (SSH may drop before tmux processes it). This
+        // separate SSH connection reliably cleans up the zombie CC client.
+        let sessionName = remoteTmuxSessionName
+        let detachArgs = sshCommonArguments(batchMode: true) + [
+            configuration.destination,
+            "for c in $(tmux list-clients -t \(Self.shellSingleQuoted(sessionName ?? "")) -F '#{client_tty}' 2>/dev/null); do tmux detach-client -t \"$c\" 2>/dev/null; done; true"
+        ]
         // Terminate and reap off-queue to avoid blocking the controller queue.
         DispatchQueue.global(qos: .utility).async {
-            // Give tmux a moment to process the detach before we kill SSH.
+            // Give tmux a moment to process the CC pipe detach before we kill SSH.
             Thread.sleep(forTimeInterval: 0.1)
             stdinPipe?.fileHandleForWriting.closeFile()
             proc.terminate()
             proc.waitUntilExit()
+            // Fire-and-forget: detach via separate SSH for reliability.
+            if sessionName != nil {
+                let detachProc = Process()
+                detachProc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+                detachProc.arguments = detachArgs
+                detachProc.standardOutput = FileHandle.nullDevice
+                detachProc.standardError = FileHandle.nullDevice
+                try? detachProc.run()
+                detachProc.waitUntilExit()
+            }
         }
     }
 
