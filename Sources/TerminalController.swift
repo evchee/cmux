@@ -3852,6 +3852,8 @@ class TerminalController {
         let localSocketPath = v2RawString(params, "local_socket_path")
         let terminalStartupCommand = v2RawString(params, "terminal_startup_command")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let presetTmuxSessionName = v2RawString(params, "tmux_session_name")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if relayPort != nil {
             guard let relayID, !relayID.isEmpty else {
                 return .err(code: "invalid_params", message: "relay_id is required when relay_port is set", data: nil)
@@ -3896,7 +3898,11 @@ class TerminalController {
                 terminalStartupCommand: terminalStartupCommand?.isEmpty == true ? nil : terminalStartupCommand,
                 foregroundAuthToken: foregroundAuthToken?.isEmpty == true ? nil : foregroundAuthToken
             )
-            workspace.configureRemoteConnection(config, autoConnect: autoConnect)
+            workspace.configureRemoteConnection(
+                config,
+                autoConnect: autoConnect,
+                presetTmuxSessionName: (presetTmuxSessionName?.isEmpty == false) ? presetTmuxSessionName : nil
+            )
 
             let windowId = v2ResolveWindowId(tabManager: owner)
             result = .ok([

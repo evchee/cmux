@@ -3960,6 +3960,7 @@ struct CMUXCLI {
         let extraArguments: [String]
         let localSocketPath: String
         let remoteRelayPort: Int
+        let sessionName: String?
     }
 
     private struct RemoteDaemonManifest: Decodable {
@@ -4145,6 +4146,9 @@ struct CMUXCLI {
                 configureParams["local_socket_path"] = sshOptions.localSocketPath
             }
             configureParams["terminal_startup_command"] = remoteTerminalSSHStartupCommand
+            if let sessionName = sshOptions.sessionName, !sessionName.isEmpty {
+                configureParams["tmux_session_name"] = sessionName
+            }
 
             cliDebugLog(
                 "cli.ssh.remote.configure workspace=\(String(workspaceId.prefix(8))) " +
@@ -4215,6 +4219,7 @@ struct CMUXCLI {
         var noFocus = false
         var sshOptions: [String] = []
         var extraArguments: [String] = []
+        var sessionName: String?
 
         var passthrough = false
         var index = 0
@@ -4263,6 +4268,13 @@ struct CMUXCLI {
                     sshOptions.append(value)
                 }
                 index += 2
+            case "--session":
+                guard index + 1 < commandArgs.count else {
+                    throw CLIError(message: "ssh: --session requires a value")
+                }
+                let trimmed = commandArgs[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+                sessionName = trimmed.isEmpty ? nil : trimmed
+                index += 2
             default:
                 if arg.hasPrefix("--") {
                     throw CLIError(message: "ssh: unknown flag '\(arg)'")
@@ -4293,7 +4305,8 @@ struct CMUXCLI {
             sshOptions: sshOptions,
             extraArguments: extraArguments,
             localSocketPath: localSocketPath,
-            remoteRelayPort: remoteRelayPort
+            remoteRelayPort: remoteRelayPort,
+            sessionName: sessionName
         )
     }
 
@@ -7135,12 +7148,14 @@ struct CMUXCLI {
               --port <n>              SSH port
               --identity <path>       SSH identity file path
               --ssh-option <opt>      Extra SSH -o option (repeatable)
+              --session <name>        Pre-select or create a tmux session (skips picker)
               --no-focus              Create workspace without switching to it
 
             Example:
               cmux ssh dev@my-host
               cmux ssh dev@my-host --name "gpu-box" --port 2222 --identity ~/.ssh/id_ed25519
               cmux ssh dev@my-host --ssh-option UserKnownHostsFile=/dev/null --ssh-option StrictHostKeyChecking=no
+              cmux ssh dev@my-host --session my-work
             """
         case "remote-daemon-status":
             return """

@@ -3310,6 +3310,31 @@ final class TerminalSurfaceRegistry {
 
 // MARK: - Terminal Surface (owns the ghostty_surface_t lifecycle)
 
+// MARK: - Tmux IO_MANUAL callback context
+
+/// Context object passed to Ghostty's `io_write_cb` when a surface runs in
+/// `IO_MANUAL` mode (tmux CC pane). Allows the C callback to route user input
+/// back to Swift.
+final class TmuxIOWriteContext {
+    weak var surface: TerminalSurface?
+
+    init(surface: TerminalSurface) {
+        self.surface = surface
+    }
+}
+
+/// C callback for Ghostty `io_write_cb`. Invoked on the Ghostty I/O thread when
+/// the user types in a `IO_MANUAL` surface. Routes raw bytes to the surface's
+/// `onTmuxInput` closure on the main thread.
+private let tmuxIOWriteCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UInt) -> Void = { userdata, buf, len in
+    guard let userdata, let buf, len > 0 else { return }
+    let context = Unmanaged<TmuxIOWriteContext>.fromOpaque(userdata).takeUnretainedValue()
+    let data = Data(bytes: buf, count: Int(len))
+    DispatchQueue.main.async { [weak context] in
+        context?.surface?.onTmuxInput?(data)
+    }
+}
+
 final class TerminalSurface: Identifiable, ObservableObject {
     final class SearchState: ObservableObject {
         @Published var needle: String
@@ -3381,6 +3406,25 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private let initialEnvironmentOverrides: [String: String]
     var requestedWorkingDirectory: String? { workingDirectory }
     private var additionalEnvironment: [String: String]
+
+    // MARK: - Tmux CC mode (IO_MANUAL)
+
+    /// When non-nil, this surface operates in tmux CC mode: no local subprocess.
+    /// Terminal output arrives via `processTerminalOutput(_:)` from the CC pipe.
+    /// Keyboard input is captured via `io_write_cb` and forwarded through `onTmuxInput`.
+    var tmuxPaneId: String?
+
+    /// Callback invoked when the user types in a tmux-backed surface.
+    /// The data is raw terminal input (bytes the user typed) that should be sent
+    /// to the remote tmux pane via `send-keys`.
+    var onTmuxInput: ((Data) -> Void)?
+
+    /// Callback invoked when a tmux-backed surface resizes. Parameters are
+    /// (columns, rows) after the resize. Used to send `refresh-client -C`.
+    var onTmuxSizeChanged: ((Int, Int) -> Void)?
+
+    /// Retained C callback context for `io_write_cb`. Released on surface teardown.
+    private var tmuxIOContextRef: Unmanaged<TmuxIOWriteContext>?
     let hostedView: GhosttySurfaceScrollView
     private let surfaceView: GhosttyNSView
     private var lastPixelWidth: UInt32 = 0
@@ -3491,6 +3535,71 @@ final class TerminalSurface: Identifiable, ObservableObject {
         // Surface is created when attached to a view
         hostedView.attachSurface(self)
         TerminalSurfaceRegistry.shared.register(self)
+    }
+
+    /// Create a tmux CC-backed surface. No local subprocess is spawned; terminal
+    /// output is injected via `processTerminalOutput(_:)` and keyboard input is
+    /// captured via `onTmuxInput`.
+    init(
+        tabId: UUID,
+        tmuxPaneId: String,
+        onTmuxInput: @escaping (Data) -> Void,
+        configTemplate: CmuxSurfaceConfigTemplate? = nil
+    ) {
+        self.id = UUID()
+        self.tabId = tabId
+        self.surfaceContext = GHOSTTY_SURFACE_CONTEXT_SPLIT
+        self.configTemplate = configTemplate
+        self.workingDirectory = nil
+        self.initialCommand = nil
+        self.initialEnvironmentOverrides = [:]
+        self.additionalEnvironment = [:]
+        self.tmuxPaneId = tmuxPaneId
+        self.onTmuxInput = onTmuxInput
+        let view = GhosttyNSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        self.surfaceView = view
+        self.hostedView = GhosttySurfaceScrollView(surfaceView: view)
+        hostedView.attachSurface(self)
+        TerminalSurfaceRegistry.shared.register(self)
+    }
+
+    /// Buffered terminal output waiting for the C surface to be created.
+    private var pendingTmuxOutput: Data?
+
+    /// Inject terminal output data into this surface, as if it came from a PTY.
+    /// Used for tmux CC mode where `%output` data is routed from the control
+    /// connection to per-pane surfaces. If the C surface isn't ready yet,
+    /// data is buffered and flushed when the surface is created.
+    func processTerminalOutput(_ data: Data) {
+        guard let surface else {
+            // Surface not yet created — buffer until createSurface runs.
+            if pendingTmuxOutput != nil {
+                pendingTmuxOutput!.append(data)
+            } else {
+                pendingTmuxOutput = data
+            }
+            return
+        }
+        deliverOutputToSurface(data, surface: surface)
+    }
+
+    /// Flush any buffered tmux output to the now-ready surface.
+    /// Called from `createSurface` after `ghostty_surface_new` succeeds.
+    func flushPendingTmuxOutput() {
+        guard let surface, let pending = pendingTmuxOutput else { return }
+        pendingTmuxOutput = nil
+        deliverOutputToSurface(pending, surface: surface)
+    }
+
+    private func deliverOutputToSurface(_ data: Data, surface: ghostty_surface_t) {
+        data.withUnsafeBytes { raw in
+            guard let baseAddress = raw.baseAddress else { return }
+            ghostty_surface_process_output(
+                surface,
+                baseAddress.assumingMemoryBound(to: CChar.self),
+                UInt(raw.count)
+            )
+        }
     }
 
 
@@ -4038,6 +4147,16 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
         let baseConfig = configTemplate ?? CmuxSurfaceConfigTemplate()
         var surfaceConfig = ghostty_surface_config_new()
+
+        // Tmux CC mode: use IO_MANUAL so no subprocess is spawned.
+        if tmuxPaneId != nil {
+            surfaceConfig.io_mode = GHOSTTY_SURFACE_IO_MANUAL
+            let ctx = TmuxIOWriteContext(surface: self)
+            let retained = Unmanaged.passRetained(ctx)
+            tmuxIOContextRef = retained
+            surfaceConfig.io_write_cb = tmuxIOWriteCallback
+            surfaceConfig.io_write_userdata = retained.toOpaque()
+        }
         surfaceConfig.font_size = baseConfig.fontSize
         surfaceConfig.wait_after_command = baseConfig.waitAfterCommand
         surfaceConfig.platform_tag = GHOSTTY_PLATFORM_MACOS
@@ -4270,6 +4389,9 @@ final class TerminalSurface: Identifiable, ObservableObject {
         TerminalSurfaceRegistry.shared.registerRuntimeSurface(createdSurface, ownerId: id)
         recordRuntimeSurfaceCreation()
 
+        // Flush any tmux CC output that arrived before the surface was ready.
+        flushPendingTmuxOutput()
+
         // Session scrollback replay must be one-shot. Reusing it on a later runtime
         // surface recreation would inject stale restored output into a live shell.
         additionalEnvironment.removeValue(forKey: SessionScrollbackReplayStore.environmentKey)
@@ -4393,6 +4515,12 @@ final class TerminalSurface: Identifiable, ObservableObject {
             ghostty_surface_set_size(surface, wpx, hpx)
             lastPixelWidth = wpx
             lastPixelHeight = hpx
+
+            // Notify tmux of the new terminal dimensions so it can reflow content.
+            if tmuxPaneId != nil, let onTmuxSizeChanged {
+                let sz = ghostty_surface_size(surface)
+                onTmuxSizeChanged(Int(sz.columns), Int(sz.rows))
+            }
         }
 
         // Let Ghostty continue rendering on its own wakeups for steady-state frames.
@@ -4877,6 +5005,21 @@ final class TerminalSurface: Identifiable, ObservableObject {
         ghostty_surface_free(surfaceToFree)
         runtimeSurfaceFreedOutOfBandForTesting = true
         callbackContext?.release()
+    }
+
+    /// Whether this surface wrapper holds a dangling pointer to a native surface
+    /// that was freed out-of-band by `replaceSurfaceWithFreedPointerForTesting`.
+    /// Used by callers to quarantine the stale pointer before passing it to Ghostty C APIs.
+    var isRuntimeSurfaceFreedOutOfBandForTesting: Bool { runtimeSurfaceFreedOutOfBandForTesting }
+
+    /// Tears down the surface after it has been freed out-of-band, preventing
+    /// the AppKit lifecycle from recreating it. Delegates to teardownSurface(),
+    /// which has an internal #if DEBUG guard that skips the actual free to
+    /// avoid a double-free.
+    @MainActor
+    func quarantineFreedSurface() {
+        guard runtimeSurfaceFreedOutOfBandForTesting else { return }
+        teardownSurface()
     }
 #endif
 
