@@ -8904,15 +8904,22 @@ final class Workspace: Identifiable, ObservableObject {
         return payload
     }
 
-    func configureRemoteConnection(_ configuration: WorkspaceRemoteConfiguration, autoConnect: Bool = true) {
+    func configureRemoteConnection(
+        _ configuration: WorkspaceRemoteConfiguration,
+        autoConnect: Bool = true,
+        presetTmuxSessionName: String? = nil
+    ) {
         skipControlMasterCleanupAfterDetachedRemoteTransfer = false
         // Preserve tmux session state across reconnects to the same destination so that
         // (a) the new controller can auto-reattach without showing the picker again, and
         // (b) existing pane→panel mappings stay valid for the reconnect reconciliation pass.
         // Clear everything for fresh connects (different destination) so stale tmux state
         // from the previous host does not contaminate the new connection.
+        // A CLI-provided `presetTmuxSessionName` takes priority: the caller explicitly
+        // asked for a specific session, so skip the picker and attach/create it directly.
         let isSameDestination = remoteConfiguration?.destination == configuration.destination
-        let existingTmuxSessionName = isSameDestination ? remoteTmuxSessionName : nil
+        let existingTmuxSessionName = presetTmuxSessionName
+            ?? (isSameDestination ? remoteTmuxSessionName : nil)
         let existingReconciler = isSameDestination ? tmuxLayoutReconciler : nil
         remoteConfiguration = configuration
         remoteTmuxSessionName = isSameDestination ? remoteTmuxSessionName : nil
